@@ -45,56 +45,6 @@ data tests, and some passwords sat in committed SQL files. dbt and the approach 
 
 ---
 
-# Phase 0: Understanding the Problem
-
-## What is ELT? (and where my understanding was wrong)
-My first mental model was: *"I write the ELT pipeline as a Python file, push the code onto Snowflake, and it runs 
-there."* That turned out to be half right.
-
-ELT stands for **Extract → Load → Transform**:
-1. **Extract:** get the data from where it lives (S3 buckets)
-2. **Load:** copy it into Snowflake *as-is*, still messy (the "raw" layer)
-3. **Transform:** clean and reshape it *inside* Snowflake into useful tables
-
-The older approach is ETL, where data is cleaned (e.g. in Python) *before* loading. ELT flips the order: load 
-first, then use the warehouse's own processing power to transform. That's why this stack is SQL-heavy, not 
-Python-heavy.
-
-The correction: **the pipeline is not one Python file, and nothing gets "pushed onto" 
-Snowflake.**
-* **Extract + Load** are SQL commands run directly in Snowflake (stages + `COPY INTO`).
-* **Transform** is a dbt project: a folder of SQL `SELECT` files in a Git repo. When dbt runs, it works out the 
-order of the models, wraps each one in `CREATE TABLE ... AS`, and *sends* that SQL to Snowflake, which does the 
-actual work.
-* **Python** only appears at the very end, to display the finished tables.
-
-This differs from the datathon, where `main.py` was in charge. It pulled data out of Snowflake, processed it in 
-Python and wrote it back. That made sense there because the AI calls had to happen in Python. In this project dbt 
-is in charge, and Python only presents results.
-
-## Tool decision: Streamlit + Plotly instead of Power BI
-DataEngine confirmed I could replace Power BI. I'm using **Streamlit + Plotly** instead because:
-* Power BI Desktop is Windows-only and I develop on a Mac
-* It lets me show Python skills alongside SQL/dbt
-* The important rule still holds: **all transformation logic stays in dbt**. Streamlit only reads finished, 
-analytics-ready tables and never processes raw data. Swapping the presentation layer doesn't weaken the core ELT 
-requirements.
-
-## The final architecture (planned)
-```
-S3 files ──(COPY INTO, SQL in Snowflake)──▶ RAW tables
-                                              │
-                          dbt Cloud sends SQL models to Snowflake
-                                              ▼
-                     STAGING (clean) ──▶ MARTS (business tables)
-                                              │
-                         Streamlit (Python) reads the marts
-                                              ▼
-                                      Interactive dashboard
-```
-
----
-
 # Phase 1: Choosing the Data
 
 ## Attempt 1: The Citibike portal
