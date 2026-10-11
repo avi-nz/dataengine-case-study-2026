@@ -1,0 +1,17 @@
+USE ROLE SYSADMIN;
+USE WAREHOUSE CITIBIKE_WH;
+USE SCHEMA CITIBIKE.RAW;
+
+-- What files are there?
+LIST @TRIPS_STAGE;
+LIST @WEATHER_STAGE;
+
+-- Peek inside a trip file without loading anything
+SELECT METADATA$FILENAME, $1, $2, $3, $5, $14
+FROM @TRIPS_STAGE
+LIMIT 10;
+
+-- Peek at a weather record
+SELECT $1
+FROM @WEATHER_STAGE
+LIMIT 5;
