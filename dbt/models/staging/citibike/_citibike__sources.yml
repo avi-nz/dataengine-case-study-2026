@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: citibike
+    description: Citibike trip records, loaded as-is from S3 by setup/04_load_raw.sql
+    database: CITIBIKE
+    schema: RAW
+    tables:
+      - name: trips
+        description: One row per trip, 2013-06 to 2018-06. All columns stored as text.
