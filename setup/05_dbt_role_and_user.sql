@@ -22,3 +22,6 @@ CREATE USER IF NOT EXISTS DBT_SVC
   COMMENT = 'dbt Cloud service user';
 
 GRANT ROLE TRANSFORMER TO USER DBT_SVC;
+
+-- Manual step (not stored in Git): generate a key pair locally, then run
+-- ALTER USER DBT_SVC SET RSA_PUBLIC_KEY = '<public key>';
