@@ -3,8 +3,9 @@ version: 2
 models:
   - name: fct_daily_trips_weather
     description: >
-      One row per day where both trips and NYC weather exist (2016-07 to 2018-06).
-      The table the dashboard reads.
+        Contains daily NYC taxi trip data and weather conditions from July 2016
+        to June 2018. Includes only dates where both trip and weather data are
+        available. This table serves as the data source for the dashboard.
     columns:
       - name: trip_date
         data_tests:
