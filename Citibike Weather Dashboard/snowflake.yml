@@ -16,3 +16,6 @@ entities:
       name: CITIBIKE_WEATHER_DASHBOARD
     run_mode: SpcsOnly
     execute_as: OWNER
+    sharing:
+      - role: SYSADMIN
+        with_grant_option: true
