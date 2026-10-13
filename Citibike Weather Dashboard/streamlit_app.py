@@ -41,6 +41,18 @@ def fmt_approx(v):
     return f"~{abs(r)}% {'fewer' if r < 0 else 'more'}"
 
 
+def fmt_ratio(v):
+    """Rounded to the nearest half: 'about 2.5 times'."""
+    if v is None or pd.isna(v):
+        return "n/a"
+    return f"about {round(v * 2) / 2:g} times"
+
+
+def label_room(values):
+    """x-axis range with extra space on the left so bar labels don't hit the axis."""
+    return alt.Scale(domain=[min(values.min() * 1.5, -5), max(values.max(), 0)])
+
+
 def like_for_like(data, target, baseline="Dry", by="day_condition", col="trips"):
     """% change of `target` days vs `baseline` days, compared within the same
     season and day type, weighted by how many `target` days each group has."""
@@ -78,27 +90,33 @@ snow_l4l = like_for_like(f, "Snow")
 light_rain = like_for_like(no_snow, "1-2 hours", "0 hours", by="rain_hours_band")
 heavy_rain = like_for_like(no_snow, "6+ hours", "0 hours", by="rain_hours_band")
 
+season_means = f.groupby("season")["trips"].mean()
+season_ratio = (season_means["Summer"] / season_means["Winter"]
+                if {"Summer", "Winter"} <= set(season_means.index) else None)
+
 # ---------------- headline ----------------
 st.title("How weather affects Citibike usage in NYC")
 st.caption(f"{len(f)} days, {f.trip_date.min():%d %b %Y} to {f.trip_date.max():%d %b %Y} "
            "· source: dbt mart fct_daily_trips_weather (production)")
+season_text = (f"**The season matters most:** an average summer day has {fmt_ratio(season_ratio)} "
+               f"as many trips as a winter day. " if season_ratio else "")
 st.info(
-    f"**In short:** compared with dry days in the same season and day type, rain days have "
-    f"**{fmt_approx(rain_l4l)}** trips and snow days **{fmt_approx(snow_l4l)}**. "
-    f"A little rain barely matters ({fmt_approx(light_rain)} trips with 1-2 rainy hours), "
-    f"but a wet day does ({fmt_approx(heavy_rain)} with 6+ rainy hours)."
+    season_text
+    + f"**Weather matters on top of that:** compared with dry days in the same season and day type, "
+      f"rain days have **{fmt_approx(rain_l4l)}** trips and snow days **{fmt_approx(snow_l4l)}**, "
+      f"and the drop is biggest when it rains most of the day ({fmt_approx(heavy_rain)} with 6+ rainy hours)."
 )
 
-t1, t2, t3, t4 = st.tabs(["1. Baseline", "2. Weather impact",
+t1, t2, t3, t4 = st.tabs(["1. The seasons", "2. Weather on top",
                           "3. Who is affected", "4. What to do"])
 
-# ---------------- 1. baseline ----------------
+# ---------------- 1. the seasons ----------------
 with t1:
-    st.subheader("What normal demand looks like")
+    st.subheader("The season sets the level of demand")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Days analysed", f"{len(f):,}")
-    c2.metric("Total trips", f"{f.trips.sum() / 1e6:.1f}M")
-    c3.metric("Avg trips per day", f"{f.trips.mean():,.0f}")
+    c1.metric("Total trips", f"{f.trips.sum() / 1e6:.1f}M")
+    c2.metric("Avg trips per day", f"{f.trips.mean():,.0f}")
+    c3.metric("Summer day vs winter day", fmt_ratio(season_ratio))
     c4.metric("Weekend vs weekday",
               fmt_approx(pct_change(f.loc[f.is_weekend, "trips"].mean(),
                                     f.loc[~f.is_weekend, "trips"].mean())))
@@ -112,8 +130,26 @@ with t1:
         + base.mark_line(color="#1F3F7A", strokeWidth=2).encode(y="rolling_30d:Q"),
         width="stretch",
     )
-    st.caption("Light line: each day. Dark line: 30-day average. Demand roughly triples "
-               "from winter to summer, so weather has to be compared within the same season.")
+    st.caption(f"Light line: each day. Dark line: 30-day average. A summer day has "
+               f"{fmt_ratio(season_ratio)} as many trips as a winter day, so weather has to be "
+               "compared within the same season.")
+
+    st.markdown("**Season vs weather: which gap is bigger?**")
+    sc = (f.groupby(["season", "day_condition"])
+            .agg(avg_trips=("trips", "mean"), days=("trips", "size")).reset_index())
+    st.altair_chart(
+        alt.Chart(sc).mark_bar().encode(
+            x=alt.X("day_condition:N", sort=["Dry", "Rain", "Snow"], title=None,
+                    axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("avg_trips:Q", title="Avg trips per day"),
+            color=alt.Color("day_condition:N", scale=COLOURS, legend=None),
+            tooltip=["season", "day_condition",
+                     alt.Tooltip("avg_trips:Q", format=",.0f"), "days"],
+        ).properties(width=140, height=260)
+         .facet(column=alt.Column("season:N", sort=SEASONS, title=None))
+    )
+    st.caption("The difference between summer and winter is far bigger than the difference "
+               "between a dry day and a rainy day in the same season.")
 
     dow = f.groupby("day_name")["trips"].mean().reindex(DAYS).dropna().reset_index()
     st.altair_chart(
@@ -124,10 +160,12 @@ with t1:
         ),
         width="stretch",
     )
+    st.caption("Weekdays are busiest, so most riders are commuting. "
+               "So we compare weekdays and weekends separately.")
 
-# ---------------- 2. weather impact ----------------
+# ---------------- 2. weather on top ----------------
 with t2:
-    st.subheader("How much do rain and snow reduce trips?")
+    st.subheader("Within a season, how much do rain and snow reduce trips?")
     cols = st.columns(3)
     for col, cond, l4l in zip(cols, ["Dry", "Rain", "Snow"], [None, rain_l4l, snow_l4l]):
         days = f[f.day_condition == cond]
@@ -158,19 +196,40 @@ with t2:
               .rename(columns={"season": "Season", "is_weekend": "Day type"}))
     st.dataframe(tbl, hide_index=True, width="stretch")
 
+    st.markdown("**Correlation with daily trips**")
+    measures = {"avg_temp_c": "Average temperature",
+                "rainy_riding_hours": "Rainy riding hours",
+                "snowy_riding_hours": "Snowy riding hours",
+                "avg_wind_speed_ms": "Wind speed"}
+    corr = (f[list(measures) + ["trips"]].corr()["trips"]
+              .drop("trips").rename(index=measures).round(2))
+    st.dataframe(corr.rename("Correlation (r)").rename_axis("Weather measure").reset_index(),
+                 hide_index=True)
+    st.caption("r runs from -1 to 1 (0 = no relationship). Temperature has by far the strongest link, potentially due to summer being hotter"
+               "with trips, which is the seasons again. Rain still matters on top of seasons "
+               "Wind looks stronger than rain mostly because winter is windier.")
+
     st.markdown("**More rain, fewer trips?**")
-    rb = (no_snow.groupby("rain_hours_band")
-            .agg(avg_trips=("trips", "mean"), days=("trips", "size")).reset_index())
-    st.altair_chart(
-        alt.Chart(rb).mark_bar(color="#3D7EE8").encode(
-            x=alt.X("rain_hours_band:N", sort=BANDS, title="Rainy hours between 06:00 and 22:00"),
-            y=alt.Y("avg_trips:Q", title="Avg trips per day"),
-            tooltip=["rain_hours_band", alt.Tooltip("avg_trips:Q", format=",.0f"), "days"],
-        ),
-        width="stretch",
-    )
-    st.caption(f"Like-for-like vs no rain: 1-2 rainy hours, {fmt_approx(light_rain)} trips; "
-               f"6+ rainy hours, {fmt_approx(heavy_rain)}. It's sustained rain that matters.")
+    band_rows = []
+    for b in BANDS[1:]:
+        v = like_for_like(no_snow, b, "0 hours", by="rain_hours_band")
+        if v is not None:
+            band_rows.append({"band": b, "change": v, "label": fmt_approx(v)})
+    if band_rows:
+        rb = pd.DataFrame(band_rows)
+        base = alt.Chart(rb).encode(
+            y=alt.Y("band:N", sort=BANDS[1:], title=None),
+            x=alt.X("change:Q", scale=label_room(rb["change"]),
+                    title="% change in trips vs days with no rain (like-for-like)"),
+        )
+        st.altair_chart(
+            (base.mark_bar(color="#3D7EE8", size=28)
+             + base.mark_text(align="right", dx=-6).encode(text="label:N"))
+            .properties(height=160),
+            width="stretch",
+        )
+    st.caption("Rows: rainy hours between 06:00 and 22:00. Each band is compared with no-rain days "
+               "in the same season and day type. The clear drop comes when it rains for most of the day.")
 
     st.markdown("**Temperature**")
     st.altair_chart(
@@ -200,7 +259,8 @@ with t3:
         who = pd.DataFrame(rows)
         base = alt.Chart().encode(
             y=alt.Y("rider:N", title=None, sort=["Member", "Casual"]),
-            x=alt.X("change_vs_dry:Q", title="% change in trips vs dry days (like-for-like)"),
+            x=alt.X("change_vs_dry:Q", scale=label_room(who["change_vs_dry"]),
+                    title="% change in trips vs dry days (like-for-like)"),
         )
         bars = base.mark_bar().encode(
             color=alt.Color("rider:N", legend=None,
@@ -213,31 +273,42 @@ with t3:
                .facet(row=alt.Row("condition:N", title=None,
                                   header=alt.Header(labelAngle=0, labelAlign="left")))
         )
-    st.caption("Members mostly ride to work, so they have less choice. Casual riders ride "
+    st.caption("Members potentially ride to work, so they have less choice. Casual riders ride "
                "for leisure and can simply not go.")
 
 # ---------------- 4. what to do ----------------
 with t4:
     st.subheader("What this means for Citibike operations")
     st.markdown(f"""
-**1. Only plan for sustained rain, not any rain.**
-*Observed:* 1-2 rainy hours means {fmt_approx(light_rain)} trips; 6+ rainy hours means {fmt_approx(heavy_rain)}.
-*Recommendation:* trigger a "wet day" plan only when the forecast shows rain for most of the day.
-Run fewer rebalancing trucks and move bike maintenance and station repairs to those days.
+**1. Plan by season, adjust by weather.**
 
-**2. Snow is the big one.**
-*Observed:* snow days have {fmt_approx(snow_l4l)} trips, the largest effect in the data.
-*Recommendation:* schedule winter fleet maintenance around snow forecasts, and prioritise clearing
-docks at commuter stations, because members still ride.
+*What the data shows:* an average summer day has {fmt_ratio(season_ratio)} as many trips as a winter
+day. Within a season, rain days have {fmt_approx(rain_l4l)} trips and snow days {fmt_approx(snow_l4l)}.
 
-**3. Use the weather forecast in demand planning.**
-*Observed:* temperature and rain together explain much of the day-to-day swing in trips.
-*Recommendation:* feed tomorrow's forecast (temperature + expected rainy hours) into daily
-rebalancing targets instead of using last week's demand.
+*What we'd do:* set fleet size, staff rosters and major maintenance windows by season (winter is
+maintenance season). Then use tomorrow's forecast to fine-tune daily rebalancing targets.
+
+**2. Scale the response to how long it rains.**
+
+*What the data shows:* 1-2 rainy hours means {fmt_approx(light_rain)} trips; 6+ rainy hours means {fmt_approx(heavy_rain)}.
+
+*What we'd do:* a short shower trims demand a little; a forecast of rain for most of the day cuts it
+much more. Reserve the full "wet day" plan (fewer rebalancing trucks, bike maintenance and station
+repairs moved to that day) for those days.
+
+**3. Snow hits casual riders hardest.**
+
+*What the data shows:* snow days have {fmt_approx(snow_l4l)} trips, the largest weather effect in the
+data, and casual riders drop off far more than members.
+
+*What we'd do:* schedule winter fleet maintenance around snow forecasts, keep commuter stations
+clear because members still ride, and don't plan on casual demand on snow days.
 
 **Assumptions and limits**
 - This shows correlation, not cause. Holidays and special events aren't controlled for.
+- "Season" bundles temperature, daylight and tourism together; this data can't separate them.
 - Based on July 2016 to June 2018; demand and the fleet have grown since.
 - "Rainy hour" = weather label of Rain, Drizzle or Thunderstorm between 06:00 and 22:00
   (amounts are missing for two-thirds of rain readings).
+- "Dry" means no rain or snow, not necessarily sunny: it includes cloudy days.
 """)
