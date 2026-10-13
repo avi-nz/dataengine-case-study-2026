@@ -280,35 +280,34 @@ with t3:
 with t4:
     st.subheader("What this means for Citibike operations")
     st.markdown(f"""
-**1. Plan by season, adjust by weather.**
+**1. Plan the year by season and the day by the forecast.**
 
-*What the data shows:* an average summer day has {fmt_ratio(season_ratio)} as many trips as a winter
-day. Within a season, rain days have {fmt_approx(rain_l4l)} trips and snow days {fmt_approx(snow_l4l)}.
+*What the data shows:* a summer day gets {fmt_ratio(season_ratio)} as many trips as a winter day.
+Within a season, rain days have {fmt_approx(rain_l4l)} trips and snow days {fmt_approx(snow_l4l)}.
 
-*What we'd do:* set fleet size, staff rosters and major maintenance windows by season (winter is
-maintenance season). Then use tomorrow's forecast to fine-tune daily rebalancing targets.
+*What we'd do:* size the fleet, staff rosters and big maintenance jobs by season, and do the
+maintenance in winter when demand is lowest. Use tomorrow's forecast to adjust daily rebalancing targets.
 
-**2. Scale the response to how long it rains.**
+**2. Match the response to how long it rains.**
 
-*What the data shows:* 1-2 rainy hours means {fmt_approx(light_rain)} trips; 6+ rainy hours means {fmt_approx(heavy_rain)}.
+*What the data shows:* 1-2 rainy hours means {fmt_approx(light_rain)} trips. 6+ rainy hours means {fmt_approx(heavy_rain)}.
 
-*What we'd do:* a short shower trims demand a little; a forecast of rain for most of the day cuts it
-much more. Reserve the full "wet day" plan (fewer rebalancing trucks, bike maintenance and station
-repairs moved to that day) for those days.
+*What we'd do:* a short shower doesn't need a plan. When rain is forecast for most of the day, run
+fewer rebalancing trucks and move bike maintenance and station repairs to that day.
 
 **3. Snow hits casual riders hardest.**
 
-*What the data shows:* snow days have {fmt_approx(snow_l4l)} trips, the largest weather effect in the
-data, and casual riders drop off far more than members.
+*What the data shows:* snow days have {fmt_approx(snow_l4l)} trips, the biggest weather effect we found.
+Casual riders drop off far more than members.
 
-*What we'd do:* schedule winter fleet maintenance around snow forecasts, keep commuter stations
-clear because members still ride, and don't plan on casual demand on snow days.
+*What we'd do:* schedule winter maintenance around snow forecasts and keep commuter stations clear,
+since members keep riding. Don't count on casual riders when it snows.
 
 **Assumptions and limits**
-- This shows correlation, not cause. Holidays and special events aren't controlled for.
-- "Season" bundles temperature, daylight and tourism together; this data can't separate them.
-- Based on July 2016 to June 2018; demand and the fleet have grown since.
-- "Rainy hour" = weather label of Rain, Drizzle or Thunderstorm between 06:00 and 22:00
-  (amounts are missing for two-thirds of rain readings).
-- "Dry" means no rain or snow, not necessarily sunny: it includes cloudy days.
+- These are correlations, not proof of cause. Holidays and events aren't accounted for.
+- "Season" mixes temperature, daylight and tourism, and this data can't pull them apart.
+- The data covers July 2016 to June 2018. Ridership and the fleet have grown since.
+- A rainy hour is one labelled Rain, Drizzle or Thunderstorm between 06:00 and 22:00. Rain amounts
+  were missing for two-thirds of rain readings, so they aren't used to define it.
+- "Dry" means no rain or snow. It includes cloudy days, not just sunny ones.
 """)
