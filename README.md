@@ -16,9 +16,6 @@ and why each decision was made, is in [`project_development_journal.md`](project
 | **How long it rains matters** | 1-2 rainy hours: ~10% fewer trips. 6+ rainy hours: ~25% fewer. |
 | **Casual riders are the most weather-sensitive** | Rain: casual ~20% fewer vs members ~15%. Snow: casual ~70% fewer vs members ~40%. |
 
-"Like-for-like" means every rainy or snowy day is compared only with dry days from the same season
-and the same day type (weekday or weekend), so the season isn't mistaken for the weather.
-
 ## Architecture
 
 ```mermaid
