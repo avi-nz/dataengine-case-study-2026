@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: fct_daily_trips_weather
+    description: >
+      One row per day where both trips and NYC weather exist (2016-07 to 2018-06).
+      The table the dashboard reads.
+    columns:
+      - name: trip_date
+        data_tests:
+          - unique
+          - not_null
+      - name: trips
+        data_tests:
+          - not_null
+      - name: day_condition
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Dry', 'Rain', 'Snow']
