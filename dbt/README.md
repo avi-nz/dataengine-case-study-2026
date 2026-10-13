@@ -1,15 +1,20 @@
-Welcome to your new dbt project!
+# dbt project: dataengine_case_study_2026
 
-### Using the starter project
+The transform layer of the Citibike × NYC weather pipeline. See the [main README](../README.md)
+for the full architecture, findings and decisions.
 
-Try running the following commands:
-- dbt run
-- dbt test
+```
+models/
+├── staging/        one model per raw table: types, renames, unit fixes, dedupe
+│   ├── citibike/   stg_citibike__trips
+│   └── weather/    stg_weather__observations
+├── intermediate/   daily grain: int_trips__daily, int_weather__daily
+└── marts/          fct_daily_trips_weather (what the dashboard reads)
+```
 
+Build everything and run all tests:
 
-### Resources:
-- Learn more about dbt [in the docs](https://docs.getdbt.com/docs/introduction)
-- Check out [Discourse](https://discourse.getdbt.com/) for commonly asked questions and answers
-- Join the [dbt community](https://getdbt.com/community) to learn from other analytics engineers
-- Find [dbt events](https://events.getdbt.com) near you
-- Check out [the blog](https://blog.getdbt.com/) for the latest news on dbt's development and best practices
+```
+dbt deps
+dbt build
+```

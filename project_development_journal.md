@@ -469,3 +469,202 @@ build the hourly weather.
 Lesson: this is the third time checking the data changed an assumption (377 files, missing = 0, and now this). The 
 failing test did its job. Without it, every duplicated reading would have been counted twice.
 
+# Staging the trips: `stg_citibike__trips`
+
+### Profiling first
+After the weather duplicates I didn't want to write the trips model blind, so I profiled the raw table first 
+(`exploration/06_trips_profile.sql`):
+
+| Check | Result |
+| --- | --- |
+| Timestamps that don't parse | 0, every year from 2013 to 2018 |
+| Shortest trip | exactly 60 s (Citibike already removed trips under a minute) |
+| Median trip | 625 s, about 10 minutes |
+| Longest trip | 9,735,948 s, about 113 days |
+| Trips over 24 hours | 13,535 |
+| User type | 54.4M Subscriber, 7.1M Customer, 51,780 blank |
+| Birth year | 1858 to 2002 |
+| Exact duplicate trips | 2 |
+| Rows sharing a bike + start time | 19 |
+
+#### Bug:
+```
+SQL compilation error: syntax error line 7 at position 62 unexpected 'rows'.
+```
+`ROWS` is a reserved word in Snowflake (it's part of window function syntax), so `AS rows` doesn't work as a 
+column name. Renamed it to `trip_rows`.
+
+### Decisions
+* **Trips over 24 hours:** kept and flagged with `is_over_24h`. A bike that never came back still started a trip, 
+so it counts towards volume, but it's left out of average trip length.
+* **User type:** `Subscriber` → `member`, `Customer` → `casual`, blank → `unknown`. That's how Citibike talks 
+about its riders, and member vs casual turned out to be one of the main findings.
+* **Gender and birth year:** dropped. Neither helps answer the weather question, they're personal data, and a 
+birth year of 1858 shows the column isn't reliable anyway.
+
+### The trip ID
+There's no ID column, so I needed one. Bike + start time *should* be unique, because a bike can't start two trips 
+at once, but 19 rows clashed. Looking at the pairs:
+
+| Pattern | Example | What it is |
+| --- | --- | --- |
+| Same trip, stop time a few seconds apart | bike 14734: 540 s and 533 s, same stations | The return was logged twice |
+| Identical | bike 15555 | An exact duplicate |
+| Same start, different destination | bike 16825: 48,179 s to one station, 923 s to another | One record is wrong, no way to tell which |
+
+Five of the pairs came from the same station (E 2 St & Avenue B) on the same evening (12 Sep 2014), which 
+looks like one dock malfunctioning rather than random noise.
+
+My first idea was to build the ID from six columns (duration, start, stop, both stations, bike). That would have 
+been wrong: bike 14734's two rows would get different IDs and count as two trips when they're clearly one. So the 
+ID is bike + start time, and when a pair clashes I keep the first one recorded:
+```sql
+{{ dbt_utils.generate_surrogate_key(['bikeid', 'starttime']) }} as trip_id
+...
+qualify row_number() over (partition by trip_id order by _source_file, _source_row) = 1
+```
+The model has 61,468,340 rows, which is the raw count minus exactly the 19 clashes. 19 rows out of 61 million 
+can't change any result, but now the ID is actually correct and not just unique.
+
+### View or table?
+| Version | Build + tests | `count(*)` |
+| --- | --- | --- |
+| View | 1m 29s | 12 s |
+| Table | 1m 07s | — |
+
+The view's build time was really the tests. Creating a view is instant, but every test read the view, so each 
+one redid the type conversion and dedupe across all 61M rows. As a table that work happens once. So this model 
+breaks the "staging = view" rule on purpose.
+
+I didn't time `count(*)` on the table because it would be meaningless: Snowflake keeps a table's row count in its 
+metadata and answers instantly, and it also caches repeated query results. A fair test would need a real 
+aggregation with the cache turned off, but the build times were enough evidence and the deadline was close.
+
+# The daily mart
+
+Trips are one row per ride and weather is one reading at a time, so they can't be joined directly. I brought both 
+to one row per day in the intermediate layer and joined them in the mart:
+
+| Model | What it does |
+| --- | --- |
+| `int_trips__daily` | Trips per day, member vs casual, average trip length (excluding trips over 24 hours) |
+| `int_weather__daily` | Daily temperature and wind, the number of **hours** with rain or snow between 06:00 and 22:00, `day_condition` (Dry / Rain / Snow) and a rain band (0, 1-2, 3-5, 6+ hours) |
+| `fct_daily_trips_weather` | Inner join on date, plus day name, weekend flag, month and season. Built as a table because the dashboard reads it constantly |
+
+`int_weather__daily` counts distinct hours, not readings, because some hours have two readings and some have 
+none. It also keeps `riding_hours_observed`, so days with very little weather data can be spotted.
+
+The inner join *is* the overlap window: only days in both sources survive, so the dates aren't hard-coded 
+anywhere. Result:
+
+| Days | First | Last |
+| --- | --- | --- |
+| 721 | 2016-07-05 | 2018-06-30 |
+
+That range is 726 calendar days, so 5 days dropped out. Those days have no weather readings at all, so they're 
+excluded rather than guessed.
+
+The lineage graph in dbt's Catalog shows the whole design: two sources kept separate all the way through, and 
+the only join is in the mart.
+
+# Production, CI and CD
+
+### Production
+A Production environment builds into `ANALYTICS_*` schemas, separate from my `DBT_AVISHAI_*` sandbox. It needed 
+a private key, and I'd already deleted the first one, so I generated a second key pair and used Snowflake's 
+second key slot (`RSA_PUBLIC_KEY_2`). Each environment now has its own key.
+
+The production job runs `dbt build` with source freshness off (the data is historical, so a freshness check would 
+always fail) and no schedule (the data never changes, so a daily rebuild would just spend credits). Fusion updates 
+the docs in Catalog automatically on each run.
+
+### CI and CD
+| Job | Trigger | Command |
+| --- | --- | --- |
+| Deploy on merge to main | A PR is merged | `dbt build --select state:modified+` |
+| CI on pull requests | A PR is opened or updated | `dbt build --select state:modified+` |
+
+`state:modified+` builds only the models whose code changed, plus everything downstream, and reads unchanged 
+models from production. My first test merge only changed a description, so the merge job took 16 seconds and 
+didn't touch the 61M-row trips table.
+
+#### Bug:
+After the first test PR, GitHub said **Checks 0**. I'd created a merge job and *named* it "CI on pull requests", 
+so it only ran after merging. Nothing checked the PR before. I renamed it and created a proper CI job. The next PR 
+(#7) showed "All checks have passed · dbt Cloud run success" before I merged it.
+
+# The dashboard
+
+DataEngine let me replace Power BI, so I used **Streamlit in Snowflake**. It runs inside Snowflake (no credentials 
+or hosting) and lives in its own `CITIBIKE.APPS` schema. It only reads the production mart, so every number has 
+been through tested dbt models.
+
+### Like-for-like
+The first version compared all rain days with all dry days. Some of the results looked wrong. Casual riders seemed 
+*less* affected by rain than members, which didn't make sense.
+
+The problem was the seasons. Rain days and dry days aren't spread evenly across the year, so a rainy Tuesday in 
+January ended up compared with a sunny Saturday in July. Casual riders mostly ride in summer, which skewed their 
+numbers the most.
+
+The fix was to compare **like for like**: each rain or snow day is only compared with dry days in the same season 
+and day type (weekday or weekend), then the differences are averaged, weighted by how many rain days each group 
+has.
+
+| | All days mixed | Like-for-like |
+| --- | --- | --- |
+| Rain days vs dry | ~10% fewer | ~15% fewer |
+| Snow days vs dry | ~55% fewer | ~40% fewer |
+| Rain: casual / member | ~5% / ~10% fewer | ~20% / ~15% fewer |
+
+Snow got smaller because snow only happens in winter, and the raw number blamed snow for winter being quiet. The 
+casual vs member result flipped completely.
+
+I also rounded all numbers in the text to the nearest 5%. Two years of data doesn't justify "−23%".
+
+### Changing the story
+Adding a correlation table changed what the dashboard was about:
+
+| Weather measure | Correlation with daily trips (r) |
+| --- | --- |
+| Average temperature | 0.73 |
+| Rainy riding hours | −0.17 |
+| Snowy riding hours | −0.30 |
+| Wind speed | −0.32 |
+
+Temperature, which is really the season, is by far the strongest. Rain is real but much smaller. Wind looks 
+stronger than rain only because winter is windier. So the story became **"the season sets the level of demand, 
+and weather moves it up or down from there"**.
+
+The final dashboard has a summary banner and four tabs:
+1. **The seasons:** trips over time, a season × weather chart (the gap between summer and winter is far bigger 
+than the gap between dry and rainy days within a season), weekdays vs weekends
+2. **Weather on top:** like-for-like numbers, a table by season and day type, correlations, rain duration and 
+temperature
+3. **Who is affected:** members vs casual riders
+4. **What to do:** recommendations, each with "what the data shows" kept separate from "what we'd do", plus 
+assumptions and limits
+
+#### Bug:
+The rain-duration chart plotted raw averages but its caption used like-for-like numbers, so the chart (3-5 hours 
+as high as no rain) contradicted the caption ("the longer it rains, the bigger the drop"). I switched the chart to 
+like-for-like as well. Then the "~25% fewer" label sat on top of the axis labels because the longest bar reached 
+the edge of the chart, so I added extra space on the left of the axis (`label_room()`).
+
+### Checking the 06:00-22:00 assumption
+Trips by hour of day showed commuter peaks at 8am and 5-6pm and very little overnight, so almost all riding 
+happens inside the window I used for rainy hours. The assumption from the weather section held up.
+
+### Final findings
+
+| Finding | |
+| --- | --- |
+| The season matters most | A summer day has more than twice as many trips as a winter day |
+| Rain | ~15% fewer trips, like-for-like |
+| Snow | ~40% fewer trips, like-for-like |
+| Duration of rain | 1-2 rainy hours ~10% fewer, 6+ rainy hours ~25% fewer |
+| Casual riders | More weather-sensitive than members, especially in snow (~70% vs ~40% fewer) |
+
+Lesson: the raw comparison wasn't just less precise, it gave the wrong answer for casual riders. Comparing like 
+with like was the most important analysis decision in the project.
+
