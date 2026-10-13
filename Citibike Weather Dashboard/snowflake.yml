@@ -3,10 +3,16 @@ entities:
   streamlit_app:
     type: streamlit
     main_file: streamlit_app.py
-    title: "Citibike Weather Dashboard"
-    query_warehouse: "CITIBIKE_WH"
-    compute_pool: "SYSTEM_COMPUTE_POOL_CPU"
+    title: Citibike Weather Dashboard
+    query_warehouse: CITIBIKE_WH
+    compute_pool: SYSTEM_COMPUTE_POOL_CPU
     artifacts:
       - pyproject.toml
       - streamlit_app.py
       - .streamlit/config.toml
+    identifier:
+      database: CITIBIKE
+      schema: APPS
+      name: CITIBIKE_WEATHER_DASHBOARD
+    run_mode: SpcsOnly
+    execute_as: OWNER
